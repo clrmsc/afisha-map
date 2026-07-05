@@ -33,9 +33,19 @@
     .leaflet-popup-content { margin:10px 12px; font-size:13px; max-height:280px; overflow-y:auto; }
     .pop-venue { font-weight:700; margin-bottom:2px; }
     .pop-addr { color:#555; font-size:12px; margin-bottom:8px; }
-    .pop-ev { padding:6px 0; border-top:1px solid #eee; }
+    .pop-ev { padding:8px 0; border-top:1px solid #eee; }
     .pop-ev .en { font-weight:600; }
     .pop-ev .ed { color:#666; font-size:12px; }
+    .leaflet-popup-content { width:300px !important; }
+    /* Фотогалерея выставки */
+    .gal { position:relative; margin:6px 0; border-radius:8px; overflow:hidden; background:#000; touch-action:pan-y; }
+    .gal-img { display:block; width:100%; height:170px; object-fit:cover; user-select:none; }
+    .gal-nav { position:absolute; top:50%; transform:translateY(-50%); width:30px; height:30px; border:none; border-radius:50%;
+      background:rgba(0,0,0,.55); color:#fff; font-size:18px; line-height:30px; cursor:pointer; z-index:5; }
+    .gal-nav:hover { background:rgba(0,0,0,.8); }
+    .gal-prev { left:6px; } .gal-next { right:6px; }
+    .gal-count { position:absolute; right:8px; bottom:8px; background:rgba(0,0,0,.6); color:#fff; font-size:11px; padding:2px 7px; border-radius:10px; }
+    .gal-open { position:absolute; left:8px; bottom:8px; background:rgba(0,0,0,.6); color:#fff; font-size:11px; padding:2px 7px; border-radius:10px; text-decoration:none; }
     #status { padding:8px 16px; font-size:12px; color:var(--muted); border-top:1px solid var(--line); }
     @media (max-width:640px){ #app{flex-direction:column;} #sidebar{width:100%;max-width:none;height:45%;} #map{height:55%;} }
   </style>
@@ -71,12 +81,28 @@
 
     let ALL = [];              // все события с координатами
     let venueMarkers = new Map(); // placeUrl -> marker
+    const PHOTOS = {};         // id выставки -> массив url фотографий
 
     const esc = (s) => (s || '').replace(/[&<>"]/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const priceLabel = (e) => e.minPrice != null ? `от ${e.minPrice} ₽` : (e.hasTickets ? 'билеты есть' : '');
 
     function eventUrl(e) { return 'https://www.afisha.ru' + e.url; }
+
+    // HTML фотогалереи выставки (одно фото + стрелки/счётчик; листается кликом и свайпом).
+    function galleryHtml(e) {
+      const photos = e.photos || [];
+      if (!photos.length) return '';
+      PHOTOS[e.id] = photos;
+      const multi = photos.length > 1;
+      return `
+        <div class="gal" data-id="${e.id}" data-idx="0">
+          <img class="gal-img" src="${esc(photos[0])}" alt="" loading="lazy" onerror="this.closest('.gal').style.display='none'"/>
+          ${multi ? '<button class="gal-nav gal-prev" aria-label="назад">‹</button><button class="gal-nav gal-next" aria-label="вперёд">›</button>' : ''}
+          <a class="gal-open" href="${esc(photos[0])}" target="_blank" rel="noopener">открыть</a>
+          ${multi ? `<span class="gal-count">1/${photos.length}</span>` : ''}
+        </div>`;
+    }
 
     function render(events) {
       cluster.clearLayers();
@@ -95,6 +121,7 @@
           <div class="pop-ev">
             <div class="en"><a href="${eventUrl(e)}" target="_blank" rel="noopener">${esc(e.name)}</a></div>
             <div class="ed">${esc(e.dates)}${priceLabel(e) ? ' · ' + esc(priceLabel(e)) : ''}${e.rating ? ' · ★ ' + e.rating : ''}</div>
+            ${galleryHtml(e)}
           </div>`).join('');
         const html = `
           <div class="pop-venue">${esc(v.place?.name || 'Площадка')}</div>
@@ -168,6 +195,36 @@
 
     document.getElementById('search').addEventListener('input', applyFilters);
     document.getElementById('genre').addEventListener('change', applyFilters);
+
+    // Листание галереи. Попапы Leaflet пересоздаются, поэтому используем делегирование.
+    function showPhoto(gal, delta) {
+      const arr = PHOTOS[gal.dataset.id];
+      if (!arr || arr.length < 2) return;
+      const idx = ((Number(gal.dataset.idx) + delta) % arr.length + arr.length) % arr.length;
+      gal.dataset.idx = idx;
+      gal.querySelector('.gal-img').src = arr[idx];
+      const open = gal.querySelector('.gal-open'); if (open) open.href = arr[idx];
+      const cnt = gal.querySelector('.gal-count'); if (cnt) cnt.textContent = `${idx + 1}/${arr.length}`;
+    }
+    document.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('.gal-nav');
+      if (!btn) return;
+      ev.preventDefault();
+      showPhoto(btn.closest('.gal'), btn.classList.contains('gal-next') ? 1 : -1);
+    });
+    // Свайп пальцем на тач-экранах.
+    let touchX = null;
+    document.addEventListener('touchstart', (ev) => {
+      const gal = ev.target.closest('.gal');
+      touchX = gal ? ev.touches[0].clientX : null;
+    }, { passive: true });
+    document.addEventListener('touchend', (ev) => {
+      if (touchX == null) return;
+      const gal = ev.target.closest('.gal');
+      const dx = ev.changedTouches[0].clientX - touchX;
+      if (gal && Math.abs(dx) > 30) showPhoto(gal, dx < 0 ? 1 : -1);
+      touchX = null;
+    }, { passive: true });
 
     // Leaflet должен пересчитать размер после того, как flex-раскладка отдала карте её реальные размеры.
     const fixSize = () => map.invalidateSize();

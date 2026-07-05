@@ -142,6 +142,32 @@ export async function resolveVenueCoords(placeUrl) {
   return null;
 }
 
+/**
+ * Достать со страницы выставки сразу и координаты площадки (AddressGeoPoint),
+ * и фотогалерею (model.Media.Gallery.Photos). Один запрос — оба результата.
+ * @returns {{ coords: {lat,lng,source}|null, photos: string[] }}
+ */
+export async function resolveEventDetails(eventUrl, { maxPhotos = 20 } = {}) {
+  const html = await fetchHtml(eventUrl);
+
+  let coords = null;
+  const m = html.match(
+    /"AddressGeoPoint":\{"Latitude":(-?\d+\.?\d*),"Longitude":(-?\d+\.?\d*)\}/,
+  );
+  if (m) coords = { lat: Number(m[1]), lng: Number(m[2]), source: 'afisha' };
+
+  const media = extractNrp(html)?.model?.Media || {};
+  const photos = [];
+  const push = (u) => {
+    if (u && !photos.includes(u)) photos.push(u);
+  };
+  // Главное фото — первым, затем вся галерея.
+  push(media.Photo16x9?.Url || media.Photo1x1?.Url);
+  for (const p of media.Gallery?.Photos || []) push(p?.Image?.Url);
+
+  return { coords, photos: photos.slice(0, maxPhotos) };
+}
+
 /** Резервное геокодирование по адресу через OpenStreetMap Nominatim. */
 export async function geocodeNominatim(address) {
   if (!USE_NOMINATIM || !address) return null;

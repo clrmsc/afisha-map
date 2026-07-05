@@ -1,12 +1,12 @@
-// Оркестратор сбора данных: спарсить листинг -> добыть координаты площадок
-// (с кэшем) -> записать data/events.json для карты.
+// Оркестратор сбора данных: спарсить листинг -> по каждой выставке добыть
+// координаты площадки + фотогалерею (с кэшем) -> записать data/events.json.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   scrapeAll,
-  resolveVenueCoords,
+  resolveEventDetails,
   geocodeNominatim,
   sleep,
 } from './afisha.js';
@@ -15,7 +15,9 @@ import { REQUEST_DELAY_MS } from './config.js';
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dir, '..', 'data');
 export const EVENTS_FILE = path.join(DATA_DIR, 'events.json');
-const VENUES_FILE = path.join(DATA_DIR, 'venues.json');
+// Кэш деталей по id выставки: { [id]: { coords, photos } }.
+// Фото и координаты не меняются, поэтому известные выставки повторно не запрашиваем.
+const DETAILS_FILE = path.join(DATA_DIR, 'details.json');
 
 function loadJson(file, fallback) {
   try {
@@ -32,59 +34,53 @@ export async function build({ log = console.log } = {}) {
   const events = await scrapeAll({ log });
   log(`Всего выставок: ${events.length}`);
 
-  // Кэш координат площадок между запусками — чтобы не дёргать одни и те же.
-  const venues = loadJson(VENUES_FILE, {});
+  const details = loadJson(DETAILS_FILE, {});
 
-  const uniquePlaces = new Map();
-  for (const e of events) {
-    if (e.place?.url && !uniquePlaces.has(e.place.url)) {
-      uniquePlaces.set(e.place.url, e.place);
-    }
-  }
-  log(`Уникальных площадок: ${uniquePlaces.size}`);
-
-  let resolved = 0;
+  let fetched = 0;
   let cached = 0;
   let failed = 0;
-  for (const [url, place] of uniquePlaces) {
-    if (venues[url]?.lat != null) {
+  log('Собираю координаты и фото по каждой выставке…');
+  for (const e of events) {
+    if (details[e.id]) {
       cached++;
       continue;
     }
     await sleep(REQUEST_DELAY_MS);
-    let coords = null;
+    let d = { coords: null, photos: [] };
     try {
-      coords = await resolveVenueCoords(url);
-    } catch (e) {
-      log(`  ! ${url}: ${e.message}`);
+      d = await resolveEventDetails(e.url);
+    } catch (err) {
+      log(`  ! ${e.name}: ${err.message}`);
     }
-    if (!coords) {
+    // Резервное геокодирование, если у afisha не оказалось координат.
+    if (!d.coords && e.place?.address) {
       await sleep(1100); // вежливость к Nominatim (не чаще 1 req/s)
       try {
-        coords = await geocodeNominatim(place.address);
+        d.coords = await geocodeNominatim(e.place.address);
       } catch { /* пропускаем */ }
     }
-    venues[url] = { name: place.name, address: place.address, ...(coords || {}) };
-    if (coords) {
-      resolved++;
-      log(`  ✓ ${place.name} [${coords.source}]`);
+    details[e.id] = { coords: d.coords, photos: d.photos };
+    if (d.coords) {
+      fetched++;
+      log(`  ✓ ${e.name} — фото: ${d.photos.length} [${d.coords.source}]`);
     } else {
       failed++;
-      log(`  ✗ ${place.name} — координаты не найдены`);
+      log(`  ✗ ${e.name} — координаты не найдены (фото: ${d.photos.length})`);
     }
   }
-  fs.writeFileSync(VENUES_FILE, JSON.stringify(venues, null, 2));
-  log(`Площадки: получено ${resolved}, из кэша ${cached}, без координат ${failed}`);
+  fs.writeFileSync(DETAILS_FILE, JSON.stringify(details, null, 2));
+  log(`Детали: получено ${fetched}, из кэша ${cached}, без координат ${failed}`);
 
-  // Прикрепляем координаты к событиям.
+  // Прикрепляем координаты и фото к событиям.
   let withCoords = 0;
   for (const e of events) {
-    const v = e.place?.url ? venues[e.place.url] : null;
-    if (v?.lat != null) {
-      e.lat = v.lat;
-      e.lng = v.lng;
+    const d = details[e.id];
+    if (d?.coords?.lat != null) {
+      e.lat = d.coords.lat;
+      e.lng = d.coords.lng;
       withCoords++;
     }
+    e.photos = d?.photos || (e.image ? [e.image] : []);
   }
 
   const out = {
