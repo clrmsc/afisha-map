@@ -1,0 +1,17 @@
+[Unit]
+Description=afisha-map — веб-сервер карты выставок
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Поменяйте путь и пользователя под свою систему (напр. /home/pi/afisha-map, User=pi)
+WorkingDirectory=/home/pi/afisha-map
+ExecStart=/usr/bin/npm start
+Environment=PORT=4444
+Restart=always
+RestartSec=5
+User=pi
+
+[Install]
+WantedBy=multi-user.target

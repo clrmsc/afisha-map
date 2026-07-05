@@ -1,0 +1,11 @@
+[Unit]
+Description=afisha-map — обновление данных (парсинг afisha.ru)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Поменяйте путь и пользователя под свою систему
+WorkingDirectory=/home/pi/afisha-map
+ExecStart=/usr/bin/npm run scrape
+User=pi

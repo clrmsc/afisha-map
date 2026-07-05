@@ -1,0 +1,10 @@
+[Unit]
+Description=afisha-map — ежедневный парсинг выставок
+
+[Timer]
+# Каждый день в 06:30. Persistent=true — если Pi был выключен, запустит после включения.
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

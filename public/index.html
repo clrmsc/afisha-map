@@ -36,6 +36,10 @@
     .pop-ev { padding:8px 0; border-top:1px solid #eee; }
     .pop-ev .en { font-weight:600; }
     .pop-ev .ed { color:#666; font-size:12px; }
+    .pop-price { color:#0a7d33; font-weight:700; }
+    .pop-buy { display:inline-block; margin-top:6px; padding:5px 12px; background:var(--accent); color:#fff !important;
+      font-size:12px; font-weight:600; border-radius:8px; text-decoration:none; }
+    .pop-buy:hover { background:#e63a58; text-decoration:none; }
     .leaflet-popup-content { width:300px !important; }
     /* Фотогалерея выставки */
     .gal { position:relative; margin:6px 0; border-radius:8px; overflow:hidden; background:#000; touch-action:pan-y; }
@@ -101,13 +105,40 @@
     const cluster = L.markerClusterGroup({ maxClusterRadius: 45 });
     map.addLayer(cluster);
 
+    // При открытии попапа заранее подгружаем соседние фото каждой галереи.
+    map.on('popupopen', (e) => {
+      const el = e.popup.getElement();
+      if (!el) return;
+      el.querySelectorAll('.gal').forEach((g) => {
+        const arr = PHOTOS[g.dataset.id];
+        preload(arr && arr[0]);
+        preloadAround(arr, Number(g.dataset.idx));
+      });
+    });
+
     let ALL = [];              // все события с координатами
     let venueMarkers = new Map(); // placeUrl -> marker
     const PHOTOS = {};         // id выставки -> массив url фотографий
 
+    // Предзагрузка фото в фоне, чтобы листалось мгновенно.
+    const _preloaded = new Set();
+    function preload(url) {
+      if (!url || _preloaded.has(url)) return;
+      _preloaded.add(url);
+      const img = new Image();
+      img.src = url;
+    }
+    function preloadAround(arr, idx) {
+      if (!arr || arr.length < 2) return;
+      preload(arr[(idx + 1) % arr.length]);
+      preload(arr[(idx - 1 + arr.length) % arr.length]);
+    }
+
     const esc = (s) => (s || '').replace(/[&<>"]/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    const priceLabel = (e) => e.minPrice != null ? `от ${e.minPrice} ₽` : (e.hasTickets ? 'билеты есть' : '');
+    // Афиша не отдаёт точную цену во встроенных данных (грузится через кассу),
+    // поэтому показываем «от X ₽», только если поле реально заполнено.
+    const priceLabel = (e) => (e.minPrice != null ? `от ${e.minPrice} ₽` : '');
 
     function eventUrl(e) { return 'https://www.afisha.ru' + e.url; }
 
@@ -139,12 +170,16 @@
       }
 
       for (const [key, v] of byVenue) {
-        const items = v.events.map((e) => `
+        const items = v.events.map((e) => {
+          const price = priceLabel(e);
+          return `
           <div class="pop-ev">
             <div class="en"><a href="${eventUrl(e)}" target="_blank" rel="noopener">${esc(e.name)}</a></div>
-            <div class="ed">${esc(e.dates)}${priceLabel(e) ? ' · ' + esc(priceLabel(e)) : ''}${e.rating ? ' · ★ ' + e.rating : ''}</div>
+            <div class="ed">${esc(e.dates)}${price ? ' · <span class="pop-price">' + esc(price) + '</span>' : ''}${e.rating ? ' · ★ ' + e.rating : ''}</div>
             ${galleryHtml(e)}
-          </div>`).join('');
+            <div><a class="pop-buy" href="${eventUrl(e)}" target="_blank" rel="noopener">${e.hasTickets ? 'Купить билеты' : 'Подробнее'} →</a></div>
+          </div>`;
+        }).join('');
         const html = `
           <div class="pop-venue">${esc(v.place?.name || 'Площадка')}</div>
           <div class="pop-addr">${esc(v.place?.address || '')}</div>
@@ -227,6 +262,7 @@
       gal.querySelector('.gal-img').src = arr[idx];
       const open = gal.querySelector('.gal-open'); if (open) open.href = arr[idx];
       const cnt = gal.querySelector('.gal-count'); if (cnt) cnt.textContent = `${idx + 1}/${arr.length}`;
+      preloadAround(arr, idx);
     }
     document.addEventListener('click', (ev) => {
       const btn = ev.target.closest('.gal-nav');
@@ -272,6 +308,7 @@
       const multi = lbPhotos.length > 1;
       lbNav.forEach((b) => (b.style.display = multi ? '' : 'none'));
       lbCount.style.display = multi ? '' : 'none';
+      preloadAround(lbPhotos, lbIdx);
     }
     function openLightbox(id, idx) {
       lbPhotos = PHOTOS[id] || [];

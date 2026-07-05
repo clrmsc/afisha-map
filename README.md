@@ -17,6 +17,30 @@
 - На карте: маркер на площадку, в попапе — список выставок с фотогалереей
   (стрелки, счётчик, свайп на тач-экранах) и ссылками на билеты.
 - `src/server.js` — лёгкий HTTP-сервер без зависимостей: отдаёт карту и `/api/events`.
+  Данные читаются из `data/events.json` при каждом запросе, поэтому после парсинга
+  сервер отдаёт свежие данные **без перезапуска**.
+
+### Как работает парсер (по шагам)
+
+1. **Листинг.** `scrapeAll()` качает первую страницу раздела (`LIST_PATH`), из встроенного
+   JSON достаёт `ScheduleWidget.Pager.PagesCount` (сколько всего страниц) и `Items`
+   (выставки). Затем в цикле обходит остальные страницы (`.../page2/`, `page3/`, …)
+   с паузой `REQUEST_DELAY_MS` между запросами. Из каждой карточки берёт название,
+   площадку с адресом, даты, жанры, картинку, ссылку. Дубли схлопываются по `id`.
+2. **Детали по каждой выставке.** Для каждой выставки `resolveEventDetails()` заходит
+   на её страницу и одним запросом достаёт сразу и **координаты площадки**
+   (`AddressGeoPoint`), и **фотогалерею** (`Media.Gallery.Photos`, до 20 фото).
+3. **Кэш.** Результат по каждой выставке кладётся в `data/details.json` по её `id`.
+   Фото и координаты не меняются, поэтому при следующем запуске известные выставки
+   **не перезапрашиваются** — качаются только новые. Первый прогон ~2 мин, последующие быстрее.
+4. **Геокодинг-фолбэк.** Если у выставки не нашлось координат — адрес геокодируется
+   через OpenStreetMap Nominatim (можно отключить `USE_NOMINATIM=0`).
+5. **Запись.** Всё собирается в `data/events.json` (со штампом времени `generatedAt`),
+   который читает и сервер, и карта.
+
+Ключевой трюк: данные встроены в HTML как `window.__nrp['root'] = {...}`. Парсер находит
+этот объект и вычитывает сбалансированный JSON (учёт кавычек/скобок) — см. `extractNrp()`
+в [`src/afisha.js`](src/afisha.js). Никакого headless-браузера, всё на голом Node.
 
 ## Быстрый старт
 
@@ -47,37 +71,44 @@ REFRESH_MIN=360 npm start                                        # сервер 
 
 ## Развёртывание на Raspberry Pi
 
+Готовые unit-файлы лежат в папке [`deploy/`](deploy). В них поправьте путь
+(`/home/pi/afisha-map`) и пользователя (`pi`) под свою систему.
+
 **1. Node.js** (если ещё нет):
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
+sudo apt-get install -y nodejs git
 ```
 
-**2. Сервис (автозапуск)** — `/etc/systemd/system/afisha-map.service`:
-```ini
-[Unit]
-Description=afisha-map
-After=network-online.target
-
-[Service]
-WorkingDirectory=/home/pi/afisha-map
-ExecStart=/usr/bin/npm start
-Environment=PORT=4444
-Restart=always
-User=pi
-
-[Install]
-WantedBy=multi-user.target
-```
+**2. Веб-сервер как сервис (автозапуск после включения Pi):**
 ```bash
-sudo systemctl enable --now afisha-map
+sudo cp deploy/afisha-map.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now afisha-map      # поднимется сам и после перезагрузки
 ```
 
-**3. Ежедневное обновление данных** через cron (`crontab -e`):
-```cron
-30 6 * * * cd /home/pi/afisha-map && /usr/bin/npm run scrape >> /home/pi/afisha-map/scrape.log 2>&1
+**3. Ежедневный парсинг (systemd-таймер):**
+```bash
+sudo cp deploy/afisha-scrape.service deploy/afisha-scrape.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now afisha-scrape.timer   # запускает парсинг каждый день в 06:30
+
+# полезные команды:
+systemctl list-timers afisha-scrape.timer    # когда следующий запуск
+sudo systemctl start afisha-scrape.service    # запустить парсинг прямо сейчас
+journalctl -u afisha-scrape.service -n 50     # посмотреть лог парсинга
 ```
-(Либо не трогать cron, а запустить сервер с `REFRESH_MIN=360` — тогда он сам обновляет.)
+`Persistent=true` в таймере: если Pi был выключен в 06:30 — парсинг догонится после включения.
+Сервер перезапускать не нужно — он подхватывает свежий `data/events.json` автоматически.
+
+> Альтернатива без таймера: запустить сервер с `REFRESH_MIN=1440` — тогда он сам
+> парсит раз в сутки в своём процессе (в `deploy/afisha-map.service` добавьте
+> строку `Environment=REFRESH_MIN=1440`).
+>
+> Или через cron (`crontab -e`):
+> ```cron
+> 30 6 * * * cd /home/pi/afisha-map && /usr/bin/npm run scrape >> scrape.log 2>&1
+> ```
 
 ## Замечания
 
@@ -98,6 +129,10 @@ afisha-map/
 │   ├── build.js     # сбор данных -> data/events.json
 │   └── server.js    # HTTP-сервер
 ├── public/
-│   └── index.html   # карта (Leaflet)
-└── data/            # генерируется: events.json, venues.json (кэш координат)
+│   └── index.html   # карта (Leaflet) + фотогалерея + лайтбокс
+├── deploy/          # systemd unit-файлы для Raspberry Pi
+│   ├── afisha-map.service
+│   ├── afisha-scrape.service
+│   └── afisha-scrape.timer
+└── data/            # генерируется: events.json + details.json (кэш координат и фото)
 ```
