@@ -20,17 +20,17 @@
 ```bash
 cd afisha-map
 npm run scrape     # собрать данные -> data/events.json (1–2 мин)
-npm start          # сервер на http://localhost:3000
+npm start          # сервер на http://localhost:4444
 ```
 
-Открыть в браузере `http://<ip-raspberry-pi>:3000`.
+Открыть в браузере `http://<ip-raspberry-pi>:4444`.
 
 ## Настройки (переменные окружения)
 
 | Переменная         | По умолчанию                              | Описание |
 |--------------------|-------------------------------------------|----------|
 | `LIST_PATH`        | `/msk/schedule_exhibition/na-segodnya/`   | Раздел афиши (город/тип/дата) |
-| `PORT`             | `3000`                                    | Порт сервера |
+| `PORT`             | `4444`                                    | Порт сервера |
 | `REQUEST_DELAY_MS` | `700`                                     | Пауза между запросами к afisha |
 | `MAX_PAGES`        | `0` (все)                                 | Ограничить число страниц листинга |
 | `USE_NOMINATIM`    | `1`                                       | `0` — отключить резервное геокодирование |
@@ -59,7 +59,7 @@ After=network-online.target
 [Service]
 WorkingDirectory=/home/pi/afisha-map
 ExecStart=/usr/bin/npm start
-Environment=PORT=3000
+Environment=PORT=4444
 Restart=always
 User=pi
 
