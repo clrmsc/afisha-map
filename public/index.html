@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Выставки Москвы на карте — afisha.ru</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+  <style>
+    :root { --bg:#12141a; --panel:#1b1e27; --line:#2a2e3a; --fg:#e8eaf0; --muted:#9aa0b0; --accent:#ff4d6d; }
+    * { box-sizing: border-box; }
+    html, body { margin:0; height:100%; font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color:var(--fg); background:var(--bg); }
+    #app { display:flex; height:100%; }
+    #sidebar { width:360px; max-width:80vw; background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; }
+    #map { flex:1; }
+    header { padding:14px 16px; border-bottom:1px solid var(--line); }
+    header h1 { font-size:16px; margin:0 0 2px; }
+    header .sub { font-size:12px; color:var(--muted); }
+    .controls { padding:10px 16px; border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+    .controls input, .controls select { width:100%; padding:8px 10px; background:#0f1117; border:1px solid var(--line); border-radius:8px; color:var(--fg); font-size:13px; }
+    #list { overflow-y:auto; flex:1; }
+    .card { padding:10px 16px; border-bottom:1px solid var(--line); cursor:pointer; display:flex; gap:10px; }
+    .card:hover { background:#232735; }
+    .card img { width:52px; height:52px; object-fit:cover; border-radius:6px; flex:none; background:#0f1117; }
+    .card .t { font-size:13px; font-weight:600; line-height:1.25; margin-bottom:2px; }
+    .card .m { font-size:11px; color:var(--muted); line-height:1.3; }
+    .rating { color:var(--accent); font-weight:700; }
+    a { color:#7db3ff; text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .leaflet-popup-content { margin:10px 12px; font-size:13px; max-height:280px; overflow-y:auto; }
+    .pop-venue { font-weight:700; margin-bottom:2px; }
+    .pop-addr { color:#555; font-size:12px; margin-bottom:8px; }
+    .pop-ev { padding:6px 0; border-top:1px solid #eee; }
+    .pop-ev .en { font-weight:600; }
+    .pop-ev .ed { color:#666; font-size:12px; }
+    #status { padding:8px 16px; font-size:12px; color:var(--muted); border-top:1px solid var(--line); }
+    @media (max-width:640px){ #app{flex-direction:column;} #sidebar{width:100%;max-width:none;height:45%;} #map{height:55%;} }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <header>
+        <h1>Выставки Москвы на карте</h1>
+        <div class="sub">Источник: afisha.ru</div>
+      </header>
+      <div class="controls">
+        <input id="search" type="search" placeholder="Поиск по названию или площадке…" />
+        <select id="genre"><option value="">Все жанры</option></select>
+      </div>
+      <div id="list"></div>
+      <div id="status">Загрузка…</div>
+    </div>
+    <div id="map"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script>
+    const map = L.map('map').setView([55.751244, 37.618423], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap',
+    }).addTo(map);
+
+    const cluster = L.markerClusterGroup({ maxClusterRadius: 45 });
+    map.addLayer(cluster);
+
+    let ALL = [];              // все события с координатами
+    let venueMarkers = new Map(); // placeUrl -> marker
+
+    const esc = (s) => (s || '').replace(/[&<>"]/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const priceLabel = (e) => e.minPrice != null ? `от ${e.minPrice} ₽` : (e.hasTickets ? 'билеты есть' : '');
+
+    function eventUrl(e) { return 'https://www.afisha.ru' + e.url; }
+
+    function render(events) {
+      cluster.clearLayers();
+      venueMarkers.clear();
+
+      // группируем события по площадке
+      const byVenue = new Map();
+      for (const e of events) {
+        const key = e.place?.url || (e.lat + ',' + e.lng);
+        if (!byVenue.has(key)) byVenue.set(key, { place: e.place, lat: e.lat, lng: e.lng, events: [] });
+        byVenue.get(key).events.push(e);
+      }
+
+      for (const [key, v] of byVenue) {
+        const items = v.events.map((e) => `
+          <div class="pop-ev">
+            <div class="en"><a href="${eventUrl(e)}" target="_blank" rel="noopener">${esc(e.name)}</a></div>
+            <div class="ed">${esc(e.dates)}${priceLabel(e) ? ' · ' + esc(priceLabel(e)) : ''}${e.rating ? ' · ★ ' + e.rating : ''}</div>
+          </div>`).join('');
+        const html = `
+          <div class="pop-venue">${esc(v.place?.name || 'Площадка')}</div>
+          <div class="pop-addr">${esc(v.place?.address || '')}</div>
+          ${items}`;
+        const marker = L.marker([v.lat, v.lng]).bindPopup(html, { maxWidth: 320 });
+        cluster.addLayer(marker);
+        venueMarkers.set(key, marker);
+      }
+      renderList(events);
+    }
+
+    function renderList(events) {
+      const list = document.getElementById('list');
+      const sorted = [...events].sort((a, b) => (b.rating || 0) - (a.rating || 0));
+      list.innerHTML = sorted.map((e) => `
+        <div class="card" data-key="${esc(e.place?.url || (e.lat + ',' + e.lng))}">
+          <img src="${esc(e.image || '')}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"/>
+          <div>
+            <div class="t">${esc(e.name)}</div>
+            <div class="m">${esc(e.place?.name || '')}</div>
+            <div class="m">${esc(e.dates)}${e.rating ? ' · <span class="rating">★ ' + e.rating + '</span>' : ''}${priceLabel(e) ? ' · ' + esc(priceLabel(e)) : ''}</div>
+          </div>
+        </div>`).join('') || '<div style="padding:16px;color:var(--muted)">Ничего не найдено</div>';
+
+      list.querySelectorAll('.card').forEach((el) => {
+        el.addEventListener('click', () => {
+          const m = venueMarkers.get(el.dataset.key);
+          if (m) { map.setView(m.getLatLng(), 15); cluster.zoomToShowLayer(m, () => m.openPopup()); }
+        });
+      });
+    }
+
+    function applyFilters() {
+      const q = document.getElementById('search').value.trim().toLowerCase();
+      const genre = document.getElementById('genre').value;
+      const filtered = ALL.filter((e) => {
+        if (genre && !(e.genres || []).includes(genre)) return false;
+        if (!q) return true;
+        return (e.name || '').toLowerCase().includes(q) || (e.place?.name || '').toLowerCase().includes(q);
+      });
+      render(filtered);
+      setStatus(filtered.length);
+    }
+
+    let META = {};
+    function setStatus(shown) {
+      const when = META.generatedAt ? new Date(META.generatedAt).toLocaleString('ru-RU') : '';
+      document.getElementById('status').textContent =
+        `Показано ${shown} из ${ALL.length} (на карте). Всего собрано: ${META.count || 0}. Обновлено: ${when}`;
+    }
+
+    async function load() {
+      try {
+        const res = await fetch('/api/events');
+        if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+        const data = await res.json();
+        META = data;
+        ALL = (data.events || []).filter((e) => e.lat != null && e.lng != null);
+
+        const genres = [...new Set(ALL.flatMap((e) => e.genres || []))].sort();
+        const sel = document.getElementById('genre');
+        for (const g of genres) {
+          const o = document.createElement('option'); o.value = g; o.textContent = g; sel.appendChild(o);
+        }
+        applyFilters();
+      } catch (e) {
+        document.getElementById('status').textContent = 'Ошибка: ' + e.message;
+      }
+    }
+
+    document.getElementById('search').addEventListener('input', applyFilters);
+    document.getElementById('genre').addEventListener('change', applyFilters);
+
+    // Leaflet должен пересчитать размер после того, как flex-раскладка отдала карте её реальные размеры.
+    const fixSize = () => map.invalidateSize();
+    window.addEventListener('load', () => setTimeout(fixSize, 200));
+    window.addEventListener('resize', fixSize);
+    setTimeout(fixSize, 300);
+
+    load().then(fixSize);
+  </script>
+</body>
+</html>

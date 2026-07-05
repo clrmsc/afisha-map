@@ -1,0 +1,14 @@
+{
+  "name": "afisha-map",
+  "version": "1.0.0",
+  "description": "Парсинг выставок с afisha.ru (Москва) и отображение на карте. Работает на Raspberry Pi, без внешних npm-зависимостей.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "scrape": "node src/build.js",
+    "start": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
